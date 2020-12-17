@@ -40,9 +40,9 @@ type s3ProgressStruct struct {
 }
 
 func main() {
-	programStartTime := time.Now()
 	parseCommandLineFlags()
 	doubleCheckBucketName()
+	programStartTime := time.Now()
 	go logToTerminal(0)
 	newSession := session.Must(session.NewSession())
 	s3Session = s3.New(newSession, aws.NewConfig().WithRegion(awsRegion))
@@ -61,24 +61,28 @@ func main() {
 	completedKeyList = true
 	counter := 0
 	bucketKeys = append(bucketKeys)
-	for counter < len(bucketKeys) && len(bucketKeys) > 0 {
-		waitGroup.Add(1)
-		go func(counter int) {
-			for activeHTTPCallCounter >= maxConcurrentHTTPCalls {
-				time.Sleep(time.Millisecond * 500)
-			}
-			activeHTTPCallCounter++
-			if counter+deleteConcurrency < len(bucketKeys) {
-				deleteS3Objects(bucketKeys[counter : counter+deleteConcurrency])
+outerLoop:
+	for range time.Tick(time.Second) {
+		for i := 0; i < maxConcurrentHTTPCalls; i++ {
+			if counter < len(bucketKeys) && len(bucketKeys) > 0 {
+				waitGroup.Add(1)
+				go func(counter int) {
+					activeHTTPCallCounter++
+					if counter+deleteConcurrency < len(bucketKeys) {
+						deleteS3Objects(bucketKeys[counter : counter+deleteConcurrency])
+					} else {
+						deleteS3Objects(bucketKeys[counter:len(bucketKeys)])
+					}
+					defer func() {
+						activeHTTPCallCounter--
+						waitGroup.Done()
+					}()
+				}(counter)
+				counter += deleteConcurrency
 			} else {
-				deleteS3Objects(bucketKeys[counter:len(bucketKeys)])
+				break outerLoop
 			}
-			defer func() {
-				activeHTTPCallCounter--
-				waitGroup.Done()
-			}()
-		}(counter)
-		counter += deleteConcurrency
+		}
 	}
 	waitGroup.Wait()
 	completedExecution = true
@@ -107,7 +111,7 @@ func parseCommandLineFlags() {
 
 func doubleCheckBucketName() {
 	var enteredBucketName string
-	fmt.Printf("ReEnter the Bucket Name to be emptied : ")
+	fmt.Printf("Re-Enter the Bucket Name to be emptied : ")
 	_, err := fmt.Scanln(&enteredBucketName)
 	if err != nil {
 		logError(err.Error())
