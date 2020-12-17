@@ -6,8 +6,7 @@ env GOOS=darwin go build -o s3-bulk-delete-mac
 echo "Done building for Mac"
 env GOOS=linux go build -o s3-bulk-delete-linux
 echo "Done building for Linux"
-DIR="/binaries"
-if [ -d "$DIR" ]; then
-    mkdir bin
+if [ ! -d "./binaries" ]; then
+    mkdir binaries
 fi
 mv s3-bulk-delete* binaries/

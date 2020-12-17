@@ -23,7 +23,7 @@ var (
 	queryConcurreny        = int64(1000)
 	deleteConcurrency      = 1000
 	activeHTTPCallCounter  = 0
-	maxConcurrentHTTPCalls = 600
+	maxConcurrentHTTPCalls = 10
 	timeFrameSampleCount   = 1000
 	s3ProgressObject       = s3ProgressStruct{}
 	failedKeysData         string
