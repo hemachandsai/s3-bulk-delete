@@ -21,9 +21,9 @@ var (
 	bucketKeys             = []string{}
 	waitGroup              = &sync.WaitGroup{}
 	queryConcurreny        = int64(1000)
-	deleteConcurrency      = 1000
+	deleteConcurrency      = 500
 	activeHTTPCallCounter  = 0
-	maxConcurrentHTTPCalls = 10
+	maxConcurrentHTTPCalls = 7
 	timeFrameSampleCount   = 1000
 	s3ProgressObject       = s3ProgressStruct{}
 	failedKeysData         string
