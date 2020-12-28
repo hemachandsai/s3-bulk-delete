@@ -28,6 +28,7 @@ var (
 	deleteConcurrency      = 500
 	activeHTTPCallCounter  = 0
 	maxConcurrentHTTPCalls = 7
+	maxQueuedHTTPCalls     = 21
 	timeFrameSampleCount   = 1000
 	s3ProgressObject       = s3ProgressStruct{}
 	failedKeysData         string
@@ -77,7 +78,7 @@ func main() {
 outerLoop:
 	for range time.Tick(time.Second) {
 		for i := 0; i < maxConcurrentHTTPCalls; i++ {
-			if activeHTTPCallCounter < maxConcurrentHTTPCalls*3 {
+			if activeHTTPCallCounter < maxQueuedHTTPCalls {
 				if counter < len(bucketKeys) && len(bucketKeys) > 0 {
 					waitGroup.Add(1)
 					go func(counter int) {
