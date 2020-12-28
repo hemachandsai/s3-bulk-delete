@@ -152,13 +152,8 @@ func deleteS3Objects(s3Keys []string) {
 	if err != nil {
 		if awsErr, ok := err.(awserr.RequestFailure); ok {
 			if awsErr.StatusCode() == 503 {
-				// logError("AWS AmazonS3Exception SlowDown Error. Exiting now. Please retry after 5 seconds...")
-				// os.Exit(1)
-				// sleepingCount++
-				// fmt.Println("sleeping", sleepingCount, s3Keys[0], s3Keys[1], s3ProgressObject.KeysDeleted, deleteObjectsOutput.Errors)
-				// time.Sleep(time.Millisecond * 800)
-				// deleteS3Objects(s3Keys)
-				// sleepingCount--
+				logError("AWS AmazonS3Exception SlowDown Error. Exiting now. Please retry after 5 seconds...")
+				os.Exit(1)
 			} else {
 				panic(err)
 			}
@@ -169,7 +164,6 @@ func deleteS3Objects(s3Keys []string) {
 	}
 	s3ProgressObject.KeysDeleted += len(deleteObjectsOutput.Deleted)
 	s3ProgressObject.FailedKeys += len(deleteObjectsOutput.Errors)
-	// fmt.Println("sleeping1", sleepingCount, s3Keys[0], s3Keys[1], s3ProgressObject.KeysDeleted, len(deleteObjectsOutput.Deleted))
 	for _, value := range deleteObjectsOutput.Errors {
 		failedKeysData += *value.Key + "\n"
 	}
