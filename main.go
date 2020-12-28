@@ -4,6 +4,8 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"os/exec"
+	"runtime"
 	"sync"
 	"time"
 
@@ -29,6 +31,9 @@ var (
 	failedKeysData         string
 	completedKeyList       bool
 	completedExecution     bool
+	sleepingCount          = 0
+	clearANSISequence      = "\033[H\033[2J\033[3J"
+	isWindows              bool
 )
 
 type s3ProgressStruct struct {
@@ -40,10 +45,15 @@ type s3ProgressStruct struct {
 }
 
 func main() {
+	if runtime.GOOS == "windows" {
+		isWindows = true
+	}
 	parseCommandLineFlags()
 	doubleCheckBucketName()
+
 	programStartTime := time.Now()
 	go logToTerminal(0)
+
 	newSession := session.Must(session.NewSession())
 	s3Session = s3.New(newSession, aws.NewConfig().WithRegion(awsRegion))
 	traversedAllFiles := false
@@ -140,10 +150,26 @@ func deleteS3Objects(s3Keys []string) {
 	}
 	deleteObjectsOutput, err := s3Session.DeleteObjects(&deleteObjectsInput)
 	if err != nil {
-		panic(err)
+		if awsErr, ok := err.(awserr.RequestFailure); ok {
+			if awsErr.StatusCode() == 503 {
+				// logError("AWS AmazonS3Exception SlowDown Error. Exiting now. Please retry after 5 seconds...")
+				// os.Exit(1)
+				// sleepingCount++
+				// fmt.Println("sleeping", sleepingCount, s3Keys[0], s3Keys[1], s3ProgressObject.KeysDeleted, deleteObjectsOutput.Errors)
+				// time.Sleep(time.Millisecond * 800)
+				// deleteS3Objects(s3Keys)
+				// sleepingCount--
+			} else {
+				panic(err)
+			}
+		} else {
+			panic(err)
+		}
+		return
 	}
 	s3ProgressObject.KeysDeleted += len(deleteObjectsOutput.Deleted)
 	s3ProgressObject.FailedKeys += len(deleteObjectsOutput.Errors)
+	// fmt.Println("sleeping1", sleepingCount, s3Keys[0], s3Keys[1], s3ProgressObject.KeysDeleted, len(deleteObjectsOutput.Deleted))
 	for _, value := range deleteObjectsOutput.Errors {
 		failedKeysData += *value.Key + "\n"
 	}
@@ -178,7 +204,6 @@ func getS3ObjectsList(lastKey string) (bool, string) {
 			}
 			os.Exit(1)
 		} else {
-			//99 percent it will never hit this block but leaving it as suggested by aws sdk docs
 			panic(err.Error())
 		}
 	}
@@ -215,15 +240,14 @@ func logToTerminal(progressRecieved int) {
 		if progressRecieved == 100 {
 			progress = float64(progressRecieved)
 		}
-		fmt.Print("\033[H\033[2J")
-		padSpace := "   "
-		string1 := fmt.Sprintf(padSpace+"Total Keys: %v\n", s3ProgressObject.TotalKeys)
-		string2 := fmt.Sprintf(padSpace+"Remaining Keys: %v\n", remainingKeys)
-		string3 := fmt.Sprintf(padSpace+"Total KeysDeleted: %v\n", s3ProgressObject.KeysDeleted)
-		string4 := fmt.Sprintf(padSpace+"Total FailedKeys: %v\n", s3ProgressObject.FailedKeys)
-		string5 := fmt.Sprintf(padSpace+"Active Http Calls: %v\n", activeHTTPCallCounter)
-		string6 := fmt.Sprintf(padSpace+"Bucket Size(bytes): %v\n", s3ProgressObject.TotalFileSize)
-		string7 := fmt.Sprintf(padSpace+"Expected Duration: %v\n", anticipatedDuration)
+		clearTerminal()
+		string1 := fmt.Sprintf("\tTotal Keys: %v\n", s3ProgressObject.TotalKeys)
+		string2 := fmt.Sprintf("\tRemaining Keys: %v\n", remainingKeys)
+		string3 := fmt.Sprintf("\tTotal KeysDeleted: %v\n", s3ProgressObject.KeysDeleted)
+		string4 := fmt.Sprintf("\tTotal FailedKeys: %v\n", s3ProgressObject.FailedKeys)
+		string5 := fmt.Sprintf("\tActive Http Calls: %v\n", activeHTTPCallCounter)
+		string6 := fmt.Sprintf("\tBucket Size(Mb): %.2f\n", float64(s3ProgressObject.TotalFileSize)/float64(1024))
+		string7 := fmt.Sprintf("\tExpected Duration: %v\n", anticipatedDuration)
 		concatString := string1 + string2 + string3 + string4 + string5 + string6 + string7
 		fmt.Printf("Execution Stats(%s):\n"+concatString+"%s", bucketName, getProgressString(progress))
 		if progressRecieved != 100 {
@@ -231,6 +255,16 @@ func logToTerminal(progressRecieved int) {
 		} else {
 			break
 		}
+	}
+}
+
+func clearTerminal() {
+	if isWindows {
+		cmd := exec.Command("cmd", "/c", "cls")
+		cmd.Stdout = os.Stdout
+		cmd.Run()
+	} else {
+		fmt.Print(clearANSISequence)
 	}
 }
 
