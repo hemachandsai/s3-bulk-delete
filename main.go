@@ -5,7 +5,9 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path"
 	"runtime"
+	"strings"
 	"sync"
 	"time"
 
@@ -31,9 +33,10 @@ var (
 	failedKeysData         string
 	completedKeyList       bool
 	completedExecution     bool
-	sleepingCount          = 0
 	clearANSISequence      = "\033[H\033[2J\033[3J"
 	isWindows              bool
+	maxLimitHit            bool
+	logChannel             = make(chan string)
 )
 
 type s3ProgressStruct struct {
@@ -50,8 +53,8 @@ func main() {
 	}
 	parseCommandLineFlags()
 	doubleCheckBucketName()
-
 	programStartTime := time.Now()
+	go writeLogToFile()
 	go logToTerminal(0)
 
 	newSession := session.Must(session.NewSession())
@@ -74,23 +77,25 @@ func main() {
 outerLoop:
 	for range time.Tick(time.Second) {
 		for i := 0; i < maxConcurrentHTTPCalls; i++ {
-			if counter < len(bucketKeys) && len(bucketKeys) > 0 {
-				waitGroup.Add(1)
-				go func(counter int) {
-					activeHTTPCallCounter++
-					if counter+deleteConcurrency < len(bucketKeys) {
-						deleteS3Objects(bucketKeys[counter : counter+deleteConcurrency])
-					} else {
-						deleteS3Objects(bucketKeys[counter:len(bucketKeys)])
-					}
-					defer func() {
-						activeHTTPCallCounter--
-						waitGroup.Done()
-					}()
-				}(counter)
-				counter += deleteConcurrency
-			} else {
-				break outerLoop
+			if activeHTTPCallCounter < maxConcurrentHTTPCalls*3 {
+				if counter < len(bucketKeys) && len(bucketKeys) > 0 {
+					waitGroup.Add(1)
+					go func(counter int) {
+						activeHTTPCallCounter++
+						if counter+deleteConcurrency < len(bucketKeys) {
+							deleteS3Objects(bucketKeys[counter : counter+deleteConcurrency])
+						} else {
+							deleteS3Objects(bucketKeys[counter:len(bucketKeys)])
+						}
+						defer func() {
+							activeHTTPCallCounter--
+							waitGroup.Done()
+						}()
+					}(counter)
+					counter += deleteConcurrency
+				} else {
+					break outerLoop
+				}
 			}
 		}
 	}
@@ -152,13 +157,10 @@ func deleteS3Objects(s3Keys []string) {
 	if err != nil {
 		if awsErr, ok := err.(awserr.RequestFailure); ok {
 			if awsErr.StatusCode() == 503 {
-				// logError("AWS AmazonS3Exception SlowDown Error. Exiting now. Please retry after 5 seconds...")
-				// os.Exit(1)
-				// sleepingCount++
-				// fmt.Println("sleeping", sleepingCount, s3Keys[0], s3Keys[1], s3ProgressObject.KeysDeleted, deleteObjectsOutput.Errors)
-				// time.Sleep(time.Millisecond * 800)
-				// deleteS3Objects(s3Keys)
-				// sleepingCount--
+				logChannel <- fmt.Sprintf("Max limit reached 500 status code: %v, %v, %v", s3Keys[0], s3Keys[len(s3Keys)-1], activeHTTPCallCounter)
+				maxLimitHit = true
+				bucketKeys = append(bucketKeys, s3Keys...)
+				time.Sleep(time.Second * 1)
 			} else {
 				panic(err)
 			}
@@ -167,9 +169,18 @@ func deleteS3Objects(s3Keys []string) {
 		}
 		return
 	}
+	if len(deleteObjectsOutput.Deleted) == 0 {
+		logChannel <- fmt.Sprintf("Keys Deleted Count zero: %v, %v, %v", s3Keys[0], s3Keys[len(s3Keys)-1], activeHTTPCallCounter)
+		maxLimitHit = true
+		bucketKeys = append(bucketKeys, s3Keys...)
+		time.Sleep(time.Second * 1)
+		return
+	}
+	if maxLimitHit {
+		maxLimitHit = false
+	}
 	s3ProgressObject.KeysDeleted += len(deleteObjectsOutput.Deleted)
 	s3ProgressObject.FailedKeys += len(deleteObjectsOutput.Errors)
-	// fmt.Println("sleeping1", sleepingCount, s3Keys[0], s3Keys[1], s3ProgressObject.KeysDeleted, len(deleteObjectsOutput.Deleted))
 	for _, value := range deleteObjectsOutput.Errors {
 		failedKeysData += *value.Key + "\n"
 	}
@@ -222,6 +233,29 @@ func getS3ObjectsList(lastKey string) (bool, string) {
 	return true, ""
 }
 
+func writeLogToFile() {
+	currentDir, err := os.Getwd()
+	if err != nil {
+		panic(err)
+	}
+	localDateString := time.Now().UTC().Add(-(5*60 + 30) * time.Minute).Format("2006-01-02")
+	file, err := os.OpenFile(path.Join(currentDir, strings.Replace(localDateString, ":", "-", -1)+"-s3delete-debug.log"), os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0644)
+	if err != nil {
+		logError("Error: Failed opening file: " + err.Error())
+		os.Exit(1)
+	}
+
+	defer file.Close()
+	for {
+		logInput := <-logChannel
+		_, err = file.WriteString(logInput + "\n")
+		if err != nil {
+			logError("Error: Failed writing to log file: " + err.Error())
+			os.Exit(1)
+		}
+	}
+}
+
 func logToTerminal(progressRecieved int) {
 	for !completedExecution || progressRecieved == 100 {
 		progress := float64(0)
@@ -246,10 +280,18 @@ func logToTerminal(progressRecieved int) {
 		string3 := fmt.Sprintf("\tTotal KeysDeleted: %v\n", s3ProgressObject.KeysDeleted)
 		string4 := fmt.Sprintf("\tTotal FailedKeys: %v\n", s3ProgressObject.FailedKeys)
 		string5 := fmt.Sprintf("\tActive Http Calls: %v\n", activeHTTPCallCounter)
-		string6 := fmt.Sprintf("\tBucket Size(Mb): %.2f\n", float64(s3ProgressObject.TotalFileSize)/float64(1024))
-		string7 := fmt.Sprintf("\tExpected Duration: %v\n", anticipatedDuration)
-		concatString := string1 + string2 + string3 + string4 + string5 + string6 + string7
-		fmt.Printf("Execution Stats(%s):\n"+concatString+"%s", bucketName, getProgressString(progress))
+		var string6 string
+		if maxLimitHit {
+			string6 = "\tStatus Message: AWS Max S3 Delete Limit Hit. Slowing Down...\n"
+		} else {
+			string6 = "\tStatus Message: Deleting at rate of 3500 objects per sec...\n"
+		}
+		string7 := fmt.Sprintf("\tBucket Size(Mb): %.2f\n", float64(s3ProgressObject.TotalFileSize)/float64(1024))
+		string8 := fmt.Sprintf("\tExpected Duration: %v\n", anticipatedDuration)
+
+		concatString := string1 + string2 + string3 + string4 + string5 + string6 + string7 + string8
+		fmt.Printf("Execution Stats(%s):\n"+concatString+"\n%s", bucketName, getProgressString(progress))
+		logChannel <- fmt.Sprintf("Execution Stats(%s):\n"+concatString+"\n%s", bucketName, getProgressString(progress))
 		if progressRecieved != 100 {
 			time.Sleep(time.Millisecond * 300)
 		} else {
