@@ -19,25 +19,26 @@ import (
 )
 
 var (
-	s3Session              *s3.S3
-	bucketName             string
-	awsRegion              string
-	bucketKeys             = []string{}
-	waitGroup              = &sync.WaitGroup{}
-	queryConcurreny        = int64(1000)
-	deleteConcurrency      = 500
-	activeHTTPCallCounter  = 0
-	maxConcurrentHTTPCalls = 7
-	maxQueuedHTTPCalls     = 21
-	timeFrameSampleCount   = 1000
-	s3ProgressObject       = s3ProgressStruct{}
-	failedKeysData         string
-	completedKeyList       bool
-	completedExecution     bool
-	clearANSISequence      = "\033[H\033[2J\033[3J"
-	isWindows              bool
-	maxLimitHit            bool
-	logChannel             = make(chan string)
+	s3Session               *s3.S3
+	bucketName              string
+	awsRegion               string
+	bucketKeys              = []string{}
+	waitGroup               = &sync.WaitGroup{}
+	queryConcurreny         = int64(1000)
+	deleteConcurrency       = 500
+	activeHTTPCallCounter   = 0
+	maxConcurrentHTTPCalls  = 7
+	maxQueuedHTTPCalls      = 25
+	timeFrameSampleCount    = 1000
+	s3ProgressObject        = s3ProgressStruct{}
+	failedKeysData          string
+	completedKeyList        bool
+	completedExecution      bool
+	clearANSISequence       = "\033[H\033[2J\033[3J"
+	isWindows               bool
+	maxLimitHit             bool
+	logChannel              = make(chan string)
+	exitOnAccessDeniedError = true
 )
 
 type s3ProgressStruct struct {
@@ -104,7 +105,7 @@ outerLoop:
 	completedExecution = true
 	logToTerminal(100)
 	if len(failedKeysData) > 0 {
-		fmt.Println("Failed Keys Data: ", failedKeysData)
+		fmt.Println("Failed Keys Data:\nErrorCode\tKeyName\tErrorMessage\n", failedKeysData)
 	}
 	fmt.Println("Completed Deletion of files in the Bucket. Total time taken: ", time.Since(programStartTime))
 }
@@ -170,21 +171,31 @@ func deleteS3Objects(s3Keys []string) {
 		}
 		return
 	}
-	if len(deleteObjectsOutput.Deleted) == 0 {
+
+	s3ProgressObject.KeysDeleted += len(deleteObjectsOutput.Deleted)
+	s3ProgressObject.FailedKeys += len(deleteObjectsOutput.Errors)
+
+	if len(deleteObjectsOutput.Errors) > 0 && *deleteObjectsOutput.Errors[0].Code == "AccessDenied" && exitOnAccessDeniedError {
+		logError("Encountered AccessDenied Error While trying to delete keys. Please make sure proper permissions exists on the bucket and object. If you want to proceed even after encountering this error please change exitOnAccessDeniedError variable to false and try again...")
+		os.Exit(1)
+	}
+
+	if len(deleteObjectsOutput.Deleted) == 0 && len(deleteObjectsOutput.Errors) == 0 {
 		logChannel <- fmt.Sprintf("Keys Deleted Count zero: %v, %v, %v", s3Keys[0], s3Keys[len(s3Keys)-1], activeHTTPCallCounter)
 		maxLimitHit = true
 		bucketKeys = append(bucketKeys, s3Keys...)
 		time.Sleep(time.Second * 1)
 		return
 	}
+
 	if maxLimitHit {
 		maxLimitHit = false
 	}
-	s3ProgressObject.KeysDeleted += len(deleteObjectsOutput.Deleted)
-	s3ProgressObject.FailedKeys += len(deleteObjectsOutput.Errors)
+
 	for _, value := range deleteObjectsOutput.Errors {
-		failedKeysData += *value.Key + "\n"
+		failedKeysData += *value.Code + "\t" + *value.Key + "\t" + *value.Message + "\n"
 	}
+
 	timeTaken := time.Now().Unix() - startTime
 	if len(s3ProgressObject.TimeFrame) >= timeFrameSampleCount {
 		s3ProgressObject.TimeFrame = s3ProgressObject.TimeFrame[1:len(s3ProgressObject.TimeFrame)]
@@ -341,6 +352,7 @@ func getProgressString(currentProgress float64) string {
 }
 
 func logError(msg string) {
+	clearTerminal()
 	redColor := "\033[31m"
 	reset := "\033[0m"
 	fmt.Println(redColor + msg + reset)
