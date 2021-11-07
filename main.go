@@ -50,6 +50,7 @@ type s3ProgressStruct struct {
 }
 
 func main() {
+	printBanner()
 	if runtime.GOOS == "windows" {
 		isWindows = true
 	}
@@ -287,6 +288,7 @@ func logToTerminal(progressRecieved int) {
 			progress = float64(progressRecieved)
 		}
 		clearTerminal()
+		printBanner()
 		string1 := fmt.Sprintf("\tTotal Keys: %v\n", s3ProgressObject.TotalKeys)
 		string2 := fmt.Sprintf("\tRemaining Keys: %v\n", remainingKeys)
 		string3 := fmt.Sprintf("\tTotal KeysDeleted: %v\n", s3ProgressObject.KeysDeleted)
@@ -353,7 +355,17 @@ func getProgressString(currentProgress float64) string {
 
 func logError(msg string) {
 	clearTerminal()
+	printBanner()
 	redColor := "\033[31m"
 	reset := "\033[0m"
 	fmt.Println(redColor + msg + reset)
+}
+
+func printBanner() {
+	bannerText := `
+░█▀▀░▀▀█░░░░░█▀▄░█░█░█░░░█░█░░░░░█▀▄░█▀▀░█░░░█▀▀░▀█▀░█▀▀
+░▀▀█░░▀▄░▄▄▄░█▀▄░█░█░█░░░█▀▄░▄▄▄░█░█░█▀▀░█░░░█▀▀░░█░░█▀▀
+░▀▀▀░▀▀░░░░░░▀▀░░▀▀▀░▀▀▀░▀░▀░░░░░▀▀░░▀▀▀░▀▀▀░▀▀▀░░▀░░▀▀▀
+`
+	fmt.Println(bannerText)
 }
